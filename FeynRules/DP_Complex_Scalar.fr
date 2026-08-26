@@ -1,0 +1,103 @@
+(***************************************************************************************************************)
+(******                     This is the FeynRules mod-file for a Complex Scalar Dark Matter               ******)
+(****** Choose whether Feynman gauge is desired.                                                          ******)
+(****** If set to False, unitary gauge is assumed.                                                          ****)
+(****** Feynman gauge is especially useful for CalcHEP/CompHEP where the calculation is 10-100 times faster. ***)
+(****** Feynman gauge is not supported in MadGraph and Sherpa.                                              ****)
+(***************************************************************************************************************)
+
+(* ************************** *)
+(* *****  Information   ***** *)
+(* ************************** *)
+(* This is an add-on of SM model file, use it together with SM.fr *)
+M$ModelName = "ScalarSingletDM";
+
+M$Information = {
+  Authors      -> {"S. González"}, 
+  Version      -> "1.0",
+  Date         -> "26. 08. 2026",
+  Institutions -> {"Universität Bonn"},
+  Emails       -> {"simon.gonzalezg@uni-bonn.de"},
+  URLs         -> "none"
+};
+
+FeynmanGauge = True;
+
+(* ************************** *)
+(* **** Particle classes **** *)
+(* ************************** *)
+M$ClassesDescription = {
+
+(* Dark Photon + Complex Scalar DM candidate *)
+
+   S[12] == {
+    ClassName        -> Chi,
+    SelfConjugate    -> False,
+    Mass             -> {Mchi, 10},
+    Width            -> {Wchi, 0},
+    PropagatorLabel  -> "chi",
+    PDG              -> 301,
+    ParticleName     -> "~CHI",
+    AntiParticleName -> "~chi",
+    FullName         -> "Complex Scalar Dark Matter"
+  },
+  V[5] == {
+    ClassName       -> Ap,
+    SelfConjugate   -> True,
+    Mass            -> {MAp, 1},
+    Width           -> {WAp, 1},
+    PropagatorLabel -> "dp",
+    ParticleName    -> "Ap",
+    PDG             -> 302,
+    FullName        -> "Dark Photon"
+  }
+};
+
+M$Parameters = {
+  epsD == {
+    ParameterType     -> External,
+    BlockName         -> U1DParams,
+    OrderBlock        -> 1,
+    Value             -> 0.001,
+    InteractionOrder  -> {QED, 1},
+    TeX               -> epsilon,
+    Description       -> "Kinetic mixing"
+  },
+  gD == {
+    ParameterType     -> External,
+    BlockName         -> U1DParams,
+    OrderBlock        -> 2,
+    Value             -> 0.1,
+    InteractionOrder  -> {QED, 1},
+    TeX               -> Subscript[g, D],
+    Description       -> "Strength of U(1)D"
+  }
+};
+
+(* NB: do not use e, mu, ta, u, c, t, d, s, b as index names here -- they are
+   SM class-member field names (SM.fr F[2]-F[4]) and collide under FlavorExpand.
+   Lorentz indices are named mu1, nu1 throughout for that reason. *)
+
+LDP := Block[{mu1, nu1},
+  ExpandIndices[-1/4 FS[Ap,mu1,nu1] FS[Ap,mu1,nu1] + 1/2 MAp^2 Ap[mu1] Ap[mu1]]];
+
+Lchi := Block[{mu1},
+  ExpandIndices[-Mchi^2 Chibar Chi
+    + (del[Chibar,mu1] + I gD Ap[mu1] Chibar) (del[Chi,mu1] - I gD Ap[mu1] Chi)]];
+
+(* Fermion bilinears are written with NO explicit indices: in FeynRules the
+   first explicit slot of a fermion is the SPIN index (cf. SM.fr LYukawa,
+   QLbar[sp, ii, ff1, cc]), so l[ff] would put ff in the spin slot and collapse
+   the Dirac chain. Implicit form lets Dot handle spin and contracts the
+   repeated generation/colour indices automatically -> flavour diagonal. *)
+
+Lintf := Block[{mu1},
+  ExpandIndices[
+    epsD ee Ap[mu1] (
+        (-1)   lbar.Ga[mu1].l
+      + (2/3)  uqbar.Ga[mu1].uq
+      + (-1/3) dqbar.Ga[mu1].dq
+    )]];
+
+LDM := LDP + Lchi + Lintf;
+
