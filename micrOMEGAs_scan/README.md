@@ -105,6 +105,37 @@ carries on across the gap. A **negative** `Omega h^2` counts as a failure too:
 `darkOmega` does return one rather than an error, and the root finders need
 `Omega > 0` to work in logs.
 
+## The evaluation cache
+
+Every micrOMEGAs evaluation is cached in `data/cache.csv`, so a scan that is
+interrupted and restarted with the same grid replays its earlier work without
+spawning a process. **A run that completes deletes the cache**: at that point
+there is nothing left to resume, and all a surviving cache can do is go stale.
+A run that is interrupted, or that ends without finding a seed, keeps it --
+those are the cases where the next run has something to pick up. `--keep-cache`
+keeps it regardless.
+
+A cached point is keyed on
+**alpha_D, Mchi/MAp, MAp and eps** -- all four. The first two matter as much as
+the last two: they are fixed within a run but not between runs, and a key
+without them hands back the previous alpha_D's Omega after `config.py` is
+edited. That failure is silent in the worst way, because a cache hit spawns no
+process, so it does not even rewrite the `.par` file: the visible symptom is a
+`scan.par` whose `gD` never changes, while the numbers coming out are for the
+old alpha_D.
+
+Cache files written before this was fixed cannot be read -- nothing in them
+records which alpha_D they hold -- and are rejected with an error naming the
+file rather than loaded. Delete them, or point `--cache` elsewhere. Rebuilding
+a cache costs one scan.
+
+Note that the cache cannot see the *model*. Recompiling micrOMEGAs, or swapping
+the model in `work/models/`, invalidates every cached point without changing
+any key, and no check can catch it. That is the reason a completed run deletes
+the cache rather than leaving it: the window in which a stale cache can be read
+back is now only as long as the gap between an interrupted scan and its resume.
+If you use `--keep-cache`, delete the file yourself when the model changes.
+
 ## Notes from the first real run
 
 Against `micromegas_7.1.4/DarkPhotonComplexScalar`, `alpha_D = 0.5`,

@@ -35,7 +35,7 @@ PAR_NAMES = {
 }
 
 # Fixed during the scan.  Only MAp and epsD are scanned.
-ALPHA_D = 0.5           # dark fine structure constant
+ALPHA_D = 0.1           # dark fine structure constant
 MCHI_OVER_MAP = 0.6     # Mchi = MCHI_OVER_MAP * MAp
 
 # The .par file takes gD, which is derived from ALPHA_D below.  If you would

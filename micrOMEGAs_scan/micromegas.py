@@ -13,10 +13,16 @@ exception, so a bad point is a failed point and not a dead scan.
 '''
 
 import math
+import os
 import subprocess
 import threading
 
 import config
+
+
+# Columns of the evaluation cache.  alpha_D and the mass ratio lead, because
+# they are what makes a cached Omega belong to one run rather than another.
+CACHE_HEADER = 'alphaD,mchi_over_map,MAp,eps,omegah2,xf'
 
 
 def _fmt(x):
@@ -86,18 +92,24 @@ class Oracle:
             self._load_cache()
             self._cache_fh = open(cache_path, 'a', buffering=1)
             if self._cache_fh.tell() == 0:
-                self._cache_fh.write('MAp,eps,omegah2,xf\n')
+                self._cache_fh.write(CACHE_HEADER + '\n')
         else:
             self._cache_fh = None
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------- cache
 
-    @staticmethod
-    def _key(ma, eps):
+    def _key(self, ma, eps):
+        # alpha_D and the mass ratio are part of the identity of a point, not
+        # just MAp and eps.  They are fixed within a run but not between runs,
+        # and a key without them hands back the previous alpha_D's Omega after
+        # the config is edited -- silently, since a cache hit spawns no process
+        # and so does not even rewrite the .par file.
+        #
         # 12 significant digits: finer than any step the root finders take,
         # coarse enough that a replayed scan lands on the same key.
-        return (f'{float(ma):.12e}', f'{float(eps):.12e}')
+        return (f'{self.alpha_d:.12e}', f'{self.mchi_over_map:.12e}',
+                f'{float(ma):.12e}', f'{float(eps):.12e}')
 
     def _load_cache(self):
         try:
@@ -105,20 +117,34 @@ class Oracle:
         except OSError:
             return
         with fh:
+            header = fh.readline().strip()
+            if header != CACHE_HEADER:
+                raise ValueError(
+                    f'{self.cache_path} is not a cache file in the current '
+                    f'format.\n  expected header: {CACHE_HEADER}\n  '
+                    f'found:           {header!r}\n'
+                    f'Caches written before alpha_D and Mchi/MAp were part of '
+                    f'the key cannot be read, because nothing in them says '
+                    f'which alpha_D they were computed at.  Delete the file or '
+                    f'point --cache somewhere else.')
             for line in fh:
                 parts = line.strip().split(',')
-                if len(parts) != 4:
+                if len(parts) != 6:
                     continue
                 try:
-                    ma, eps, om, xf = (float(p) for p in parts)
+                    ad, ratio, ma, eps, om, xf = (float(p) for p in parts)
                 except ValueError:
-                    continue            # header or a torn line
-                self._cache[self._key(ma, eps)] = (om, xf)
+                    continue            # a torn line
+                # Rows for other alpha_D or mass ratios keep their own keys and
+                # simply never match, so one file can hold several scans.
+                self._cache[(f'{ad:.12e}', f'{ratio:.12e}',
+                             f'{ma:.12e}', f'{eps:.12e}')] = (om, xf)
 
     def _store(self, ma, eps, om, xf):
         self._cache[self._key(ma, eps)] = (om, xf)
         if self._cache_fh is not None:
-            self._cache_fh.write(f'{ma:.12e},{eps:.12e},{om:.12e},{xf:.12e}\n')
+            self._cache_fh.write(f'{self.alpha_d:.12e},{self.mchi_over_map:.12e},'
+                                 f'{ma:.12e},{eps:.12e},{om:.12e},{xf:.12e}\n')
 
     # ------------------------------------------------------------- calls
 
@@ -189,6 +215,28 @@ class Oracle:
             self._cache_fh.close()
             self._cache_fh = None
 
+    def discard_cache(self):
+        '''Close the cache and delete the file.
+
+        The cache exists so an interrupted scan can resume; once a scan has
+        finished there is nothing left to resume, and what remains is a file
+        that goes stale without any way to notice. Its keys record alpha_D and
+        the mass ratio, but nothing records the model, so recompiling
+        micrOMEGAs or swapping work/models leaves every entry wrong and every
+        key still matching. Deleting it on success keeps the resume and drops
+        the hazard.
+
+        Returns the path removed, or None if there was no cache file.
+        '''
+        self.close()
+        if self.cache_path is None:
+            return None
+        try:
+            os.remove(self.cache_path)
+        except OSError:
+            return None
+        return self.cache_path
+
 
 class MockOracle:
     '''Analytic stand-in for micrOMEGAs, for exercising the scan without it.
@@ -205,6 +253,7 @@ class MockOracle:
         self.eps_ref, self.ma_ref, self.mass_power = eps_ref, ma_ref, mass_power
         self.ncalls = self.nlookups = self.nfailed = 0
         self._cache = {}
+        self.cache_path = None
 
     def eps_true(self, ma):
         '''The relic line this mock defines, for checking what the scan found.'''
@@ -223,3 +272,6 @@ class MockOracle:
 
     def close(self):
         pass
+
+    def discard_cache(self):
+        return None

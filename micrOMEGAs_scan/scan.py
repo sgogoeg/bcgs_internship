@@ -186,6 +186,11 @@ def main(argv=None):
                    help='Evaluation cache CSV (default data/cache.csv)')
     p.add_argument('--no-cache', action='store_true',
                    help='Do not read or write the evaluation cache')
+    p.add_argument('--keep-cache', action='store_true',
+                   help='Keep the cache file after a run that completes; by '
+                        'default it is deleted, since it exists to resume an '
+                        'interrupted scan and cannot tell that the model has '
+                        'changed under it')
     p.add_argument('--timeout', type=float, default=None,
                    help='Seconds allowed per micrOMEGAs call')
     p.add_argument('--no-early-stop', action='store_true',
@@ -252,6 +257,10 @@ def main(argv=None):
         print(f'\nno starting point found: {note}')
         print(f'{oracle.nlookups} evaluations '
               f'({getattr(oracle, "ncalls", 0)} micrOMEGAs calls)')
+        # The cache is kept here on purpose: no seed usually means the eps
+        # window was wrong, and the retry that widens it re-uses these points.
+        if cache_path is not None:
+            print(f'cache kept at {cache_path} (the run did not complete)')
         oracle.close()
         return 1
 
@@ -316,7 +325,21 @@ def main(argv=None):
         print(f'  worst |Omega/target - 1| over the returned points: {worst:.3g}')
     print(f'written to {out_path}')
 
-    oracle.close()
+    # The scan finished, so there is nothing left to resume and the cache is
+    # only a way to get stale results later: its keys carry alpha_D and the
+    # mass ratio, but nothing carries the model, so a recompile or a swap in
+    # work/models leaves every entry wrong with every key still matching.
+    # An interrupted run never reaches here and keeps its cache.
+    if args.keep_cache:
+        if cache_path is not None:
+            print(f'cache kept at {cache_path} (--keep-cache); it will be '
+                  f'reused by the next run, which is only safe while the '
+                  f'model is unchanged')
+        oracle.close()
+    else:
+        removed = oracle.discard_cache()
+        if removed is not None:
+            print(f'cache {removed} removed (the run completed)')
     return 0
 
 
