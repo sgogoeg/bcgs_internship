@@ -247,10 +247,12 @@ def main(argv=None):
     p.add_argument("--alpha-d", type=float, default=0.5,
                    help="Dark coupling (default 0.5); the allowed ranges do not"
                         " depend on it, only the eps values reported do")
-    p.add_argument("--min-mass", type=float, default=0.0007,
-                   help="Lower end of the MAp range, GeV; the default reaches"
-                        " below the mchi = 0.53 MeV floor of the electron"
-                        " tables, where direct detection stops saying anything")
+    p.add_argument("--min-mass", type=float, default=0.01,
+                   help="Lower end of the MAp range, GeV. Going below about"
+                        " 0.001 buys nothing: the electron tables stop at"
+                        " mchi = 0.53 MeV and below mchi = m_e no annihilation"
+                        " channel is open, so those cells are untested or"
+                        " unsolvable")
     p.add_argument("--max-mass", type=float, default=2.0,
                    help="Upper end of the MAp range, GeV")
     p.add_argument("--points-mass", type=int, default=90,
