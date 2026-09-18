@@ -240,7 +240,7 @@ def main(argv=None):
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--min-r", type=float, default=0.501,
                    help="Lower end of the Mchi/MAp range, above 0.5")
-    p.add_argument("--max-r", type=float, default=0.65,
+    p.add_argument("--max-r", type=float, default=0.6,
                    help="Upper end of the Mchi/MAp range")
     p.add_argument("--points-r", type=int, default=40,
                    help="Number of mass ratios in the range, linear in R")
