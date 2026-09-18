@@ -10,13 +10,21 @@ whether direct detection excludes it. The scan therefore runs in two stages:
   2. read off, for each R, the mass intervals where the relic line sits below
      that limit.
 
+Both stages are done twice, once with the PandaX-4T S2 CEvNS recast folded into
+the limit and once without it. The recast is a reinterpretation of that data
+under a theory assumption rather than a limit the collaboration set, so the two
+answers are reported side by side rather than one replacing the other.
+
 Run it from Code/:
 
-    python3 relic_survival_map.py --recompute
+    python3 relic_survival_map.py --recompute --min-r 0.501 --max-r 0.65 --points-r 40
 
 The scan takes a few minutes on eight cores and is cached in
 data/relic_survival_map.npz; without --recompute the cache is reused and only
-the analysis and the figures are redone.
+the interval analysis and the CSVs are redone.
+
+This script writes CSVs and prints; it draws nothing. Every figure in this
+repository is produced in a notebook, reading data/relic_survival_*.csv.
 
 Only direct detection is applied. The accelerator, beam dump and supernova
 regions are not, so a point called allowed here may still be excluded by them.
@@ -38,7 +46,6 @@ import os
 for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
              "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
     os.environ.setdefault(_var, "1")
-os.environ.setdefault("MPLBACKEND", "Agg")
 
 import argparse
 import json
@@ -48,7 +55,6 @@ import sys
 import warnings
 
 import numpy as np
-import matplotlib.pyplot as plt
 
 from moller_scan import load_notebook_defs
 
@@ -56,8 +62,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DD_NOTEBOOK = os.path.join(HERE, "Direct_detection.ipynb")
 CACHE = os.path.join("data", "relic_survival_map.npz")
 
-# Cell 38 defines best2026_at, the last thing the exclusion test needs; the
-# cells past it only draw the ladder figure.
+# Cell 38 is the last one the exclusion test needs; the cells past it only draw
+# the ladder figure.
 DD_LAST_CELL = 38
 
 # The reduced Hubble constant the notebooks' own H0 corresponds to, used to
@@ -69,8 +75,8 @@ H0_TO_H = 2.1331969e-42
 # solve_ivp raises rather than returning nan.
 R_RESONANCE = 0.5
 
-GREY = "#7e7e7e"
-RED = "#d6191c"
+# The two limits reported, in the order their columns and blocks appear.
+CASES = ("nocenuns", "cenuns")
 
 
 def load_dd_defs():
@@ -91,24 +97,28 @@ def load_dd_defs():
     return ns
 
 
-# The three inputs best2026_at combines, as (mass table, sigma table, target
-# cross section): the six experiment electron envelope and the two Migdal
-# searches. They are combined in eps and not in sigma, because sigma_e and
-# sigma_SI are not the same quantity and cannot be minimised together.
+# The inputs the combined limit is built from, as (mass table, sigma table,
+# target cross section): the six experiment electron envelope and the two
+# Migdal searches. They are combined in eps and not in sigma, because sigma_e
+# and sigma_SI are not the same quantity and cannot be minimised together.
 DD_PIECES = (("mass_data_best2026", "sigmaedataGeV_best2026", "sig_si_theo_elec"),
              ("mass_data_XENON1T_migdal", "sigmasidataGeV_XENON1T_migdal",
               "sig_si_theo"),
              ("mass_data_ds50_migdal", "sigmasidataGeV_ds50_migdal",
               "sig_si_theo"))
 
+# The PandaX-4T S2 CEvNS recast, folded in only for the second case. It covers
+# mchi = 0.020 to 0.894 GeV, so it can only tighten the limit inside that band.
+DD_CENUNS = ("mass_data_cenuns", "sigmaedataGeV_cenuns", "sig_si_theo_elec")
 
-def dd_eps_limit(dd_ns, ma_grid, alpha_d, r):
+
+def dd_eps_limit(dd_ns, ma_grid, alpha_d, r, with_cenuns=False):
     """The combined 2026 limit on eps along a mass grid, inf where uncovered.
 
     This repeats best2026_at's combination rather than calling it, because
     best2026_at can only answer on the notebook's own ma_dd grid, which starts
     at MAp = 0.01 GeV. The experiments reach an order of magnitude lower --
-    SENSEI tabulates down to mchi = 0.54 MeV -- so going through best2026_at
+    SENSEI tabulates down to mchi = 0.53 MeV -- so going through best2026_at
     would report a floor that belongs to a grid rather than to any measurement.
     The pieces and the eps combination are the notebook's, via its own
     eps_dd_limit; agreement with best2026_at on the range they share is 1%, the
@@ -116,8 +126,9 @@ def dd_eps_limit(dd_ns, ma_grid, alpha_d, r):
     """
     ma_grid = np.asarray(ma_grid, dtype=float)
     mchi = r*ma_grid
+    tables = DD_PIECES + (DD_CENUNS,) if with_cenuns else DD_PIECES
     pieces = []
-    for mass_key, sigma_key, theo_key in DD_PIECES:
+    for mass_key, sigma_key, theo_key in tables:
         # eps_dd_limit refuses to extrapolate past a tabulated mass range, and
         # that refusal is carried through rather than papered over: a mass no
         # experiment reaches is untested, which is not the same as allowed.
@@ -175,17 +186,23 @@ def _safe_omega(ns):
 
 
 def _one_r(r):
-    """Relic eps(MAp) at one mass ratio, and the DD limit along it."""
+    """Relic eps(MAp) at one mass ratio, and both DD limits along it."""
     ns = _NS
     ma_grid = _JOB["ma_grid"]
+    alpha_d = _JOB["alpha_d"]
     # scan_relic_line follows the crossing from its solved neighbours instead of
     # re-bracketing every mass, which is ~2 Boltzmann solves per mass rather
     # than ~7. It is the notebook's own function, kept as the reference.
     eps, _info = ns["scan_relic_line"](ma_grid, _JOB["eps_lo"], _JOB["eps_hi"],
-                                       _JOB["alpha_d"], r,
+                                       alpha_d, r,
                                        target=ns["OmegaDM"], tol=_JOB["tol"],
                                        omega_fun=_safe_omega(ns))
-    return eps, dd_eps_limit(_JOB["dd_ns"], ma_grid, _JOB["alpha_d"], r)
+    dd_ns = _JOB["dd_ns"]
+    # Both limits are pure interpolation, so the pair costs one relic line
+    # rather than two.
+    return (eps,
+            dd_eps_limit(dd_ns, ma_grid, alpha_d, r, with_cenuns=False),
+            dd_eps_limit(dd_ns, ma_grid, alpha_d, r, with_cenuns=True))
 
 
 def compute(r_grid, job, workers):
@@ -200,9 +217,10 @@ def compute(r_grid, job, workers):
 
     eps = np.array([o[0] for o in out])
     lim = np.array([o[1] for o in out])
+    lim_cenuns = np.array([o[2] for o in out])
     np.savez(CACHE, ma=job["ma_grid"], r=r_grid, eps=eps, lim=lim,
-             alpha_d=job["alpha_d"])
-    return eps, lim
+             lim_cenuns=lim_cenuns, alpha_d=job["alpha_d"])
+    return eps, lim, lim_cenuns
 
 
 def intervals(mask, ma_grid):
@@ -217,107 +235,18 @@ def intervals(mask, ma_grid):
     return [(ma_grid[g[0]], ma_grid[g[-1]], len(g)) for g in runs]
 
 
-def parambox(ax, lines):
-    """The rounded parameter box the other figures in this repo carry."""
-    ax.text(0.03, 0.03, "\n".join(lines), transform=ax.transAxes,
-            va="bottom", ha="left", fontsize=11,
-            bbox=dict(boxstyle="round,pad=0.5", facecolor="white",
-                      edgecolor="0.6", alpha=0.9))
-
-
-def plot_eps(ma_grid, r_grid, eps, lim, ok, alpha_d, omh2, out):
-    """eps against MAp: each relic line, heavy where direct detection allows it."""
-    fig, ax = plt.subplots(figsize=(10, 10))
-
-    alive = np.where(ok.any(axis=1))[0]
-    # Too many R values make an unreadable tangle, so at most six are drawn,
-    # spread across the ones that have an allowed mass at all.
-    shown = alive[np.linspace(0, len(alive) - 1, min(6, len(alive))).astype(int)] \
-        if alive.size else np.arange(min(6, len(r_grid)))
-    colours = plt.cm.viridis(np.linspace(0.05, 0.85, len(shown)))
-
-    for colour, i in zip(colours, shown):
-        good = np.isfinite(eps[i])
-        ax.plot(ma_grid[good], eps[i][good], color=colour, lw=1.0, alpha=0.45,
-                zorder=2)
-        for lo, hi, _n in intervals(ok[i], ma_grid):
-            seg = good & (ma_grid >= lo) & (ma_grid <= hi)
-            ax.plot(ma_grid[seg], eps[i][seg], color=colour, lw=2.6, zorder=4)
-        ax.plot([], [], color=colour, lw=2.6, label=fr"$R = {r_grid[i]:.3f}$")
-
-    # One limit curve for scale. It moves with R only through mchi = R*MAp, so
-    # the spread across the R shown is modest and a single curve is honest.
-    i_mid = shown[len(shown)//2]
-    fin = np.isfinite(lim[i_mid])
-    ax.plot(ma_grid[fin], lim[i_mid][fin], color=RED, lw=1.8, ls="--", zorder=3,
-            label=fr"DD limit, $R = {r_grid[i_mid]:.3f}$")
-    ax.fill_between(ma_grid[fin], lim[i_mid][fin], 1.0, color=RED, alpha=0.12,
-                    lw=0, zorder=0)
-
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel(r"$m_{A'}$ [GeV]")
-    ax.set_ylabel(r"$\varepsilon$")
-    ax.set_xlim(ma_grid[0], ma_grid[-1])
-    ax.grid(which="major", alpha=0.4)
-    ax.grid(which="minor", alpha=0.15)
-    parambox(ax, [r"$\Omega_{\rm DM} h^2 = %.4f$ on every point" % omh2,
-                  r"$\alpha_D = %.3g$" % alpha_d,
-                  "heavy: allowed by direct detection",
-                  r"ranges are independent of $\alpha_D$"])
-    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.01), ncol=4,
-              frameon=False)
-    fig.savefig(out, bbox_inches="tight")
-    plt.close(fig)
-
-
-def plot_ranges(ma_grid, r_grid, ok, alpha_d, omh2, out):
-    """The analysis: the allowed MAp intervals, against R."""
-    fig, ax = plt.subplots(figsize=(10, 10))
-
-    dr = np.diff(r_grid).min() if len(r_grid) > 1 else 0.01
-    for i, r in enumerate(r_grid):
-        for lo, hi, _n in intervals(ok[i], ma_grid):
-            # A single allowed mass would be invisible as a bar of zero height,
-            # so it is given half a grid step either way.
-            if hi <= lo:
-                step = ma_grid[1]/ma_grid[0]
-                lo, hi = lo/np.sqrt(step), hi*np.sqrt(step)
-            ax.fill_between([r - 0.4*dr, r + 0.4*dr], lo, hi,
-                            color=RED, alpha=0.85, lw=0)
-
-    ax.axvline(R_RESONANCE, color="#2a78d6", lw=1.6, ls="--")
-    ax.text(R_RESONANCE, ma_grid[-1], r" $2m_\chi = m_{A'}$", color="#2a78d6",
-            fontsize=11, va="top", ha="left", rotation=90)
-
-    ax.set_yscale("log")
-    ax.set_xlabel(r"$R = m_\chi / m_{A'}$")
-    ax.set_ylabel(r"allowed $m_{A'}$ [GeV]")
-    ax.set_xlim(min(R_RESONANCE, r_grid[0]) - 0.4*dr, r_grid[-1] + 0.4*dr)
-    ax.set_ylim(ma_grid[0], ma_grid[-1])
-    ax.grid(which="major", alpha=0.4)
-    ax.grid(which="minor", alpha=0.15)
-    parambox(ax, [r"$\Omega_{\rm DM} h^2 = %.4f$, $\varepsilon$ solved per point" % omh2,
-                  r"$\alpha_D = %.3g$; ranges independent of it" % alpha_d,
-                  "direct detection only",
-                  "blank: no mass allowed at that $R$"])
-    ax.set_title(r"Masses direct detection still allows, against $R$", pad=16)
-    fig.savefig(out, bbox_inches="tight")
-    plt.close(fig)
-
-
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--alpha-d", type=float, default=0.5,
-                   help="Dark coupling (default 0.5); the allowed ranges do not"
-                        " depend on it, only the eps values reported do")
     p.add_argument("--min-r", type=float, default=0.501,
                    help="Lower end of the Mchi/MAp range, above 0.5")
     p.add_argument("--max-r", type=float, default=0.65,
                    help="Upper end of the Mchi/MAp range")
     p.add_argument("--points-r", type=int, default=40,
-                   help="Number of mass ratios, linear in R")
+                   help="Number of mass ratios in the range, linear in R")
+    p.add_argument("--alpha-d", type=float, default=0.5,
+                   help="Dark coupling (default 0.5); the allowed ranges do not"
+                        " depend on it, only the eps values reported do")
     p.add_argument("--min-mass", type=float, default=0.0007,
                    help="Lower end of the MAp range, GeV; the default reaches"
                         " below the mchi = 0.53 MeV floor of the electron"
@@ -382,16 +311,17 @@ def main(argv=None):
         if verbose:
             print(f"solving the relic line at {len(r_grid)} mass ratios"
                   f" with {workers} worker(s)")
-        eps, lim = compute(r_grid, job, workers)
+        eps, lim, lim_cenuns = compute(r_grid, job, workers)
     else:
         d = np.load(CACHE)
-        eps, lim = d["eps"], d["lim"]
-        if (eps.shape != (len(r_grid), len(ma_grid))
+        if ("lim_cenuns" not in d
+                or d["eps"].shape != (len(r_grid), len(ma_grid))
                 or not np.allclose(d["ma"], ma_grid)
                 or not np.allclose(d["r"], r_grid)
                 or float(d.get("alpha_d", -1)) != args.alpha_d):
-            p.error(f"{CACHE} was written for different grids or alpha_D;"
-                    " re-run with --recompute")
+            p.error(f"{CACHE} was written for different grids or alpha_D, or"
+                    " predates the CEvNS column; re-run with --recompute")
+        eps, lim, lim_cenuns = d["eps"], d["lim"], d["lim_cenuns"]
         if verbose:
             print(f"read {CACHE}")
 
@@ -399,84 +329,85 @@ def main(argv=None):
     h = ns["H0"]/H0_TO_H
     omh2 = ns["OmegaDM"]*h*h
 
-    covered = np.isfinite(lim)
-    ratio = np.where(covered, eps/lim, np.nan)
-    ok = np.isfinite(eps) & covered & (ratio < 1.0)
+    limits = {"nocenuns": lim, "cenuns": lim_cenuns}
+    covered = {c: np.isfinite(limits[c]) for c in CASES}
+    ratio = {c: np.where(covered[c], eps/limits[c], np.nan) for c in CASES}
+    ok = {c: np.isfinite(eps) & covered[c] & (ratio[c] < 1.0) for c in CASES}
 
     with open(out_csv, "w") as fh:
         fh.write(f"# relic_survival_map.py, alphaD={args.alpha_d:g},"
-                 f" direct detection only (best2026)\n")
+                 " direct detection only (best2026)\n")
         fh.write(f"# every row has Omega h^2 = {omh2:.4f} by construction;"
                  " dd_covered=0 means no experiment reaches that mchi\n")
-        fh.write("# allowed=1 iff dd_covered and eps < eps_ddlimit;"
+        fh.write("# the _cenuns columns fold in the PandaX-4T S2 CEvNS recast;"
                  " the allowed set is alphaD independent\n")
-        fh.write("R,MAp,eps,eps_ddlimit,ratio,dd_covered,allowed\n")
+        fh.write("R,MAp,eps,eps_ddlimit,ratio,dd_covered,allowed,"
+                 "eps_ddlimit_cenuns,ratio_cenuns,dd_covered_cenuns,"
+                 "allowed_cenuns\n")
         for i in range(len(r_grid)):
             for j in range(len(ma_grid)):
-                fh.write("%.10e,%.10e,%.10e,%.10e,%.10e,%d,%d\n"
-                         % (r_grid[i], ma_grid[j], eps[i, j], lim[i, j],
-                            ratio[i, j], int(covered[i, j]), int(ok[i, j])))
+                fh.write("%.10e,%.10e,%.10e,%.10e,%.10e,%d,%d,"
+                         "%.10e,%.10e,%d,%d\n"
+                         % (r_grid[i], ma_grid[j], eps[i, j],
+                            lim[i, j], ratio["nocenuns"][i, j],
+                            int(covered["nocenuns"][i, j]),
+                            int(ok["nocenuns"][i, j]),
+                            lim_cenuns[i, j], ratio["cenuns"][i, j],
+                            int(covered["cenuns"][i, j]),
+                            int(ok["cenuns"][i, j])))
 
-    nempty = 0
+    nrows = {c: 0 for c in CASES}
     with open(ranges_csv, "w") as fh:
         fh.write(f"# relic_survival_map.py, alphaD={args.alpha_d:g},"
-                 f" direct detection only (best2026)\n")
+                 " direct detection only (best2026)\n")
         fh.write(f"# allowed MAp intervals per R, Omega h^2 = {omh2:.4f};"
-                 " an R with no allowed mass contributes no row\n")
-        fh.write("# interval counts from 0 within each R; the set can be"
-                 " disjoint where the limit is strongest\n")
-        fh.write("R,interval,ma_lo,ma_hi,n_masses\n")
-        for i, r in enumerate(r_grid):
-            segs = intervals(ok[i], ma_grid)
-            if not segs:
-                nempty += 1
-            for k, (lo, hi, n) in enumerate(segs):
-                fh.write("%.10e,%d,%.10e,%.10e,%d\n" % (r, k, lo, hi, n))
+                 " case=cenuns folds in the PandaX-4T S2 CEvNS recast\n")
+        fh.write("# interval counts from 0 within each (R, case); the set can"
+                 " be disjoint where the limit is strongest\n")
+        fh.write("R,case,interval,ma_lo,ma_hi,n_masses\n")
+        for case in CASES:
+            for i, r in enumerate(r_grid):
+                for k, (lo, hi, n) in enumerate(intervals(ok[case][i], ma_grid)):
+                    fh.write("%.10e,%s,%d,%.10e,%.10e,%d\n"
+                             % (r, case, k, lo, hi, n))
+                    nrows[case] += 1
 
     if verbose:
         nsolved = int(np.isfinite(eps).sum())
         print(f"\nrelic line solved at {nsolved} of {eps.size} (R, MAp) cells")
-        if (~covered).any():
-            print(f"! {int((~covered).sum())} cells lie past every DD table and"
-                  " are recorded untested, not allowed")
-        print(f"allowed: {int(ok.sum())} cells,"
-              f" {len(r_grid) - nempty} of {len(r_grid)} mass ratios")
-        if ok.any():
-            alive = np.where(ok.any(axis=1))[0]
-            print(f"  R from {r_grid[alive].min():.4f} to {r_grid[alive].max():.4f}")
-            print(f"  MAp from {ma_grid[ok.any(axis=0)].min():.4g} to"
-                  f" {ma_grid[ok.any(axis=0)].max():.4g} GeV")
-            print("\nallowed mass intervals:")
+        for case in CASES:
+            label = "without CEvNS" if case == "nocenuns" else "with CEvNS"
+            nr = int(ok[case].any(axis=1).sum())
+            print(f"\n{label}: {int(ok[case].sum())} cells allowed,"
+                  f" {nr} of {len(r_grid)} mass ratios,"
+                  f" {nrows[case]} interval(s)")
+            if not ok[case].any():
+                continue
             print("  %-9s %-6s %s" % ("R", "n", "MAp intervals [GeV]"))
             for i, r in enumerate(r_grid):
-                segs = intervals(ok[i], ma_grid)
+                segs = intervals(ok[case][i], ma_grid)
                 if segs:
                     print("  %-9.4f %-6d %s"
-                          % (r, int(ok[i].sum()),
-                             ", ".join("%.4g-%.4g" % (lo, hi) for lo, hi, _ in segs)))
+                          % (r, int(ok[case][i].sum()),
+                             ", ".join("%.4g-%.4g" % (lo, hi)
+                                       for lo, hi, _ in segs)))
             # An interval that runs to the first or last mass the limit can be
             # evaluated at has not been closed by a measurement, it has been
-            # closed by where the scan or the tables stop. Saying which is the
-            # difference between a result and a grid artefact.
+            # closed by where the scan or the tables stop.
             edge = []
             for i in range(len(r_grid)):
-                c = np.where(covered[i])[0]
-                if c.size and (ok[i, c[0]] or ok[i, c[-1]]):
-                    edge.append(f"{r_grid[i]:.4f}")
+                c = np.where(covered[case][i])[0]
+                if c.size and (ok[case][i, c[0]] or ok[case][i, c[-1]]):
+                    edge.append(i)
             if edge:
-                print("! the allowed set runs to the edge of direct detection"
-                      f" coverage at R = {', '.join(edge)};"
+                print("  ! the allowed set runs to the edge of direct detection"
+                      f" coverage at {len(edge)} of {len(r_grid)} mass ratios;"
                       " its end there is a limit of the tables or of"
                       " --min-mass/--max-mass, not a measured boundary")
-        print(f"\nwrote {out_csv} and {ranges_csv}")
 
-    plot_eps(ma_grid, r_grid, eps, lim, ok, args.alpha_d, omh2,
-             "figures/relic_survival_eps.pdf")
-    plot_ranges(ma_grid, r_grid, ok, args.alpha_d, omh2,
-                "figures/relic_survival_ranges.pdf")
-    if verbose:
-        print("wrote figures/relic_survival_eps.pdf"
-              " and figures/relic_survival_ranges.pdf")
+        lost = int((ok["nocenuns"] & ~ok["cenuns"]).sum())
+        print(f"\nthe CEvNS recast removes {lost} otherwise allowed cell(s)")
+        print(f"\nwrote {out_csv} and {ranges_csv}")
     return 0
 
 
