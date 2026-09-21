@@ -1,0 +1,35 @@
+#: table_doi: 10.17182/hepdata.143251.v1/t2
+#: name: DarkPhoton_ExpectedContour_90CL
+#: description: 90% confidence level observed exclusion contour in the dark photon parameter space.
+#: data_file: darkphoton_expectedcontour_90cl.yaml
+#: keyword cmenergies: 13600
+#: keyword phrases: Dark Photon | B-L Gauge Boson | Long-lived particles
+#: Limit,Expected
+#: SQRT(S) [TeV],13.6
+#: LUMINOSITY [fb$^{-1}$],27.0
+Dark Photon Mass [MeV],Kinetic Mixing [none]
+10.0,0.0002419
+47.315,3.8711e-06
+60.286,4.2813e-06
+70.795,4.732e-06
+85.775,6.9519e-06
+81.384,1.1288e-05
+70.795,1.7699e-05
+69.929,1.833e-05
+52.362,2.9764e-05
+47.315,3.3878e-05
+37.442,4.8329e-05
+31.623,5.8119e-05
+25.1,7.8476e-05
+21.135,9.4359e-05
+16.954,0.00012743
+14.125,0.00016719
+11.319,0.00020691
+14.125,7.0618e-06
+14.596,6.9519e-06
+21.135,5.8952e-06
+31.623,4.6741e-06
+39.151,4.2813e-06
+47.315,3.8711e-06
+10.0,8.6512e-06
+
