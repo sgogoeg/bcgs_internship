@@ -385,7 +385,8 @@ Scan results, all `eps_*` with a matching `info_*`/`scan_info_*`:
 | `eps_relic1` | `ma_scan1` | expansion — the section that introduces it |
 | `eps_exp_m` | `ma_moller` | expansion, for the Moller comparison |
 | `eps_gg`, `eps_gg_e`, `eps_gg_lep`, `eps_gg_dirac` | `ma_moller` | Moller, by channel |
-| `eps_relic1m`, `eps_relic2..6` | `ma_scan1..6` | Moller, the parameter scans |
+| `eps_relic1m`, `eps_relic2..3` | `ma_scan1..3` | Moller, the `alpha_D` scans |
+| `relic_res` (list of `(eps, info)`) | `ma_scan_res` | Moller, `mchi/ma = 0.5 + 10^Z`, `Z = -1..-6` |
 | `eps_relic_dirac` | `ma_scan_dirac` | Dirac, expansion |
 
 **`eps_relic1m` exists because `eps_relic1` cannot be switched.** The parameter
