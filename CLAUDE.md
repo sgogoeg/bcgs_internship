@@ -32,6 +32,13 @@ automates the chain end to end — each stage is run by hand.
 5. **`Code/*.ipynb`** — the analysis notebooks, which read those CSVs from
    `Code/data/` and plot them against the notebooks' own Boltzmann solutions.
 
+6. **`Code/Direct_detection.ipynb`** — reinterprets published direct detection
+   limits as bounds on `eps(MAp)` and draws them against the relic line. Its
+   relic input is `Code/data/moller_relic_line*.csv`, written by
+   `Code/moller_scan.py`, a standalone copy of the *Moller* treatment in
+   `Relic_Abundance.ipynb`
+   (not by micrOMEGAs). See *Direct detection* below.
+
 `Code/data/micromegas_relic_line{,_onlye,_onlyl}.csv` are the stage-4 outputs
 for the `Full`, `Only electrons` and `Only leptons` variants respectively.
 Nothing inside a CSV records which variant produced it — see *Validating a
@@ -299,6 +306,75 @@ the muon channel opening agrees to 0.4% (micrOMEGAs 0.7048, python 0.7075).
 1.0254 / 0.0113. For contrast the velocity expansion against the same
 micrOMEGAs line is 0.8694 / 0.2256 — the ~15% offset is the expansion, the
 0.23 scatter is the hadrons, and they are independent.
+
+## Direct detection (`Code/Direct_detection.ipynb`)
+
+Plots only, like the other notebooks; it runs headlessly in ~6 s with the same
+extraction recipe as above (it rewrites `figures/*.pdf` too).
+
+**One cross section, both targets.**
+`sigma = 16 pi eps^2 alpha alpha_D mu^2 / (m_A'^2 + q^2)^2` with
+`q = q_ref = alpha m_e` for the electron *and* the nucleon; they differ only in
+`mu` (`sig_si_theo`, `sig_si_theo_elec`). There is no separate nucleon `q` and no
+`1/m_A'^4` contact form any more, and the dark matter form factor is `F_DM = 1`
+throughout, which is why every figure's parameter box says so. Do not
+reintroduce a `_ff` variant or a nucleon momentum transfer.
+
+**Limits are reinterpreted, not drawn.** `eps_dd_limit(ma, mchi, mass_tab,
+sigma_tab, sigma_theo)` log-log interpolates a tabulated `sigma(mchi)` limit and
+solves for the `eps` where `sigma_theo(eps=1) * eps^2` meets it, dropping `mchi`
+outside the table (it never extrapolates). Electron limits (`sigma_e`) pair with
+`sig_si_theo_elec`; nucleon limits (`sigma_SI`, the two Migdal searches) with
+`sig_si_theo`. They are combined in `eps`, never in `sigma`.
+
+**Which files make the final lines.** Everything behind the red `Best 2026` line
+and the orange CE-nu-NS region lives in `Code/data/Final DD/`: DAMIC-M 2025
+combined, DarkSide-50, XENON1T (electron), SENSEI 2024 combined, XENONnT 2026,
+PandaX-4T 2025, XENON1T Migdal, DarkSide-50 Migdal, and the PandaX-4T S2 CE-nu-NS
+recast (the orange one). Several are copies of files in `data/NewDD/` and
+`data/Kling/DD_separate/`, byte-identical; the notebook reads the `Final DD/`
+copies. `Xenon_nT_light_2026.csv` in that folder is unused. Mass units differ
+per file (MeV or GeV, `sigma` in cm^2); each loading cell converts and the file
+headers carry the arXiv code. The CE-nu-NS recast is a theory reinterpretation,
+so it is kept out of the red line and shown as the strip it would add.
+
+**alpha_D drops out.** The relic `eps` and the DD limit both scale as
+`alpha_D^-1/2`, so whether DD excludes a point depends only on `(MAp, R)`;
+`relic_survival_map.py` exploits this.
+
+**The scripts carry their own copy of the physics; the notebooks are the
+reference.** Neither script reads a notebook. `moller_scan.py` holds the slice of
+`Relic_Abundance.ipynb` the Moller relic line needs (R ratio, `g*` tables,
+Boltzmann right-hand side, the Gondolo-Gelmini fast path, `omega_of_gg{,_lep,_e}`,
+`scan_relic_line` and its root finding) and nothing else: no closed forms, no
+velocity expansion, no Dirac case, so its `scan_relic_line` defaults to
+`omega_of_gg`. `relic_survival_map.py` imports from it and holds the slice of
+`Direct_detection.ipynb` the combined 2026 line needs (the two cross sections,
+`eps_dd_limit`, the `Final DD/` readers, the six-experiment `sigma_e` envelope,
+`DD_PIECES`, `DD_CENUNS`). Data paths resolve from the script's own directory,
+so both run from any working directory.
+
+The cost is that **a physics change has to be made in both places**: a cross
+section, constant, `Final DD/` file or combination edited in a notebook is not
+picked up by the scripts, and vice versa. When moving them off the notebooks
+(10-06) the outputs were checked bit-identical to the notebook-executing
+versions: `moller_scan.py` CSVs for all three channel sets, `dd_eps_limit` and
+the relic line at several `R`, and the full `relic_survival_map.py` CSVs from the
+existing cache. Repeat that comparison after any edit to either copy.
+
+Commands (from `Code/`):
+
+```bash
+python3 moller_scan.py --min-mass 0.01 --max-mass 20 --points 300 \
+        --alpha-d 0.1 --mchi-over-ma 0.6 --output data/moller_relic_line_wide.csv
+python3 relic_survival_map.py --recompute --min-r 0.501 --max-r 0.65 --points-r 40
+```
+
+The second takes minutes on many cores and caches in `data/relic_survival_map.npz`;
+without `--recompute` it reuses the cache and only redoes the interval analysis
+and the CSVs. The `data/relic_survival_*.csv` it writes are what the notebook's
+last figure reads, so they go stale whenever the cross section or any DD file
+changes.
 
 ## Things that will bite you
 

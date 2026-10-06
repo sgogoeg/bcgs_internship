@@ -48,7 +48,6 @@ for _var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
     os.environ.setdefault(_var, "1")
 
 import argparse
-import json
 import math
 import multiprocessing
 import sys
@@ -56,15 +55,11 @@ import warnings
 
 import numpy as np
 
-from moller_scan import load_notebook_defs
+from moller_scan import H0, OmegaDM, omega_of_gg, scan_relic_line
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DD_NOTEBOOK = os.path.join(HERE, "Direct_detection.ipynb")
+FINAL_DD = os.path.join(HERE, "data", "Final DD")
 CACHE = os.path.join("data", "relic_survival_map.npz")
-
-# Cell 38 is the last one the exclusion test needs; the cells past it only draw
-# the ladder figure.
-DD_LAST_CELL = 38
 
 # The reduced Hubble constant the notebooks' own H0 corresponds to, used to
 # report the Omega h^2 that micrOMEGAs also reports.
@@ -79,63 +74,140 @@ R_RESONANCE = 0.5
 CASES = ("nocenuns", "cenuns")
 
 
-def load_dd_defs():
-    """Execute the direct detection notebook's definition cells and return their namespace."""
-    with open(DD_NOTEBOOK) as fh:
-        nb = json.load(fh)
+### The direct detection side, a copy of the definitions in
+### Direct_detection.ipynb that the combined 2026 line depends on. The notebook
+### is the reference and draws the same line; keep the two recognisably the
+### same when either changes.
 
-    ns = {"__name__": "ddnotebook"}
-    for cell in nb["cells"][:DD_LAST_CELL + 1]:
-        if cell["cell_type"] != "code":
-            continue
-        src = "".join(cell["source"])
-        # The plot cells define nothing the exclusion test needs, and the
-        # figures they write are not this script's to rewrite.
-        if "plt.subplots(" in src or "plt.plot(" in src:
-            continue
-        exec(compile(src, "<ddnotebook>", "exec"), ns)
-    return ns
+alpha = 1/137
+
+mp = 0.93827208816     # proton mass in GeV
+me = 0.51099895e-3     # electron mass in GeV
+
+# The momentum transfer in the propagator, for the electron and the nucleon
+# alike, with F_DM = 1.
+q_ref = alpha*me
+
+cm2_to_GeVm2 = 2.5681894616e27          # 1 cm^2 = (hbar c)^-2 GeV^-2
+MeV_to_GeV = 1e-3
+
+
+def sig_si_theo(ma, alpha, alphaD, mchi, epsilon, q=None):
+    """DM-nucleon cross section at momentum transfer q, in GeV^-2."""
+    q = q_ref if q is None else q
+    mu = mchi*mp/(mchi + mp)                                   # reduced mass
+    return (16*np.pi * epsilon**2 * alpha * alphaD * mu**2
+            / (ma**2 + q**2)**2)
+
+
+def sig_si_theo_elec(ma, alpha, alphaD, mchi, epsilon, q=None):
+    """DM-electron cross section at momentum transfer q, in GeV^-2."""
+    q = q_ref if q is None else q
+    mu = mchi*me/(mchi + me)                                   # reduced mass
+    return (16*np.pi * epsilon**2 * alpha * alphaD * mu**2
+            / (ma**2 + q**2)**2)
+
+
+def eps_dd_limit(ma, mchi, mass_tab, sigma_tab, sigma_theo, alphaD,
+                 alpha=alpha):
+    """epsilon at which sigma_theo equals the tabulated limit, as (ma_valid, eps_valid)."""
+    ma, mchi = np.broadcast_arrays(np.atleast_1d(ma), np.atleast_1d(mchi))
+
+    # Points whose mchi falls outside the tabulated mass range are dropped, so
+    # the limit only exists where the experiment actually constrains it.
+    inside = (mchi >= mass_tab.min()) & (mchi <= mass_tab.max())
+    ma, mchi = ma[inside], mchi[inside]
+
+    # The tabulated limits span decades over few points, so they are read
+    # off a log-log interpolation; a linear one overshoots between them.
+    sigma_lim = np.exp(np.interp(np.log(mchi), np.log(mass_tab),
+                                 np.log(sigma_tab)))
+    return ma, np.sqrt(sigma_lim / sigma_theo(ma, alpha, alphaD, mchi, 1.0))
+
+
+def read_padded(name):
+    """A Final DD file in the padded '#' format, sigma = 1 rows dropped, in (GeV, GeV^-2)."""
+    d = np.genfromtxt(os.path.join(FINAL_DD, name), comments="#")
+    d = d[d[:, 1] < 1.0]
+    d = d[np.argsort(d[:, 0])]
+    return d[:, 0]*MeV_to_GeV, d[:, 1]*cm2_to_GeVm2
+
+
+def read_csv_limit(name, mass_scale, sort=False):
+    """A Final DD file with two header lines and comma separated columns, in (GeV, GeV^-2)."""
+    d = np.loadtxt(os.path.join(FINAL_DD, name), delimiter=",", skiprows=2)
+    if sort:
+        d = d[np.argsort(d[:, 0])]
+    return d[:, 0]*mass_scale, d[:, 1]*cm2_to_GeVm2
+
+
+def best2026_electron():
+    """The six experiment sigma_e envelope, minimised in sigma on a common mchi grid."""
+    parts = [read_padded("DAMIC-M_2025_Combined.txt"),
+             read_padded("DarkSide-50.txt"),
+             read_padded("XENON1T.txt"),
+             read_padded("SENSEI_2024_Combined.txt"),
+             read_csv_limit("Xenon_nT_light_2026.txt", 1.0),
+             read_csv_limit("PandaX4T2025.txt", MeV_to_GeV)]
+
+    lo = min(m.min() for m, _ in parts)
+    hi = max(m.max() for m, _ in parts)
+    mass = np.logspace(np.log10(lo), np.log10(hi), 2000)
+
+    stack = []
+    for m, s in parts:
+        col = np.full_like(mass, np.inf)
+        inside = (mass >= m.min()) & (mass <= m.max())
+        col[inside] = np.exp(np.interp(np.log(mass[inside]),
+                                       np.log(m), np.log(s)))
+        stack.append(col)
+
+    sigma = np.min(stack, axis=0)
+    covered = np.isfinite(sigma)
+    return mass[covered], sigma[covered]
+
+
+def xenon1t_migdal():
+    """XENON1T Migdal, a bare two column sigma_SI file, in (GeV, GeV^-2)."""
+    d = np.loadtxt(os.path.join(FINAL_DD, "XENON1T-Migdal.txt"))
+    return d[:, 0], d[:, 1]*cm2_to_GeVm2
 
 
 # The inputs the combined limit is built from, as (mass table, sigma table,
 # target cross section): the six experiment electron envelope and the two
 # Migdal searches. They are combined in eps and not in sigma, because sigma_e
 # and sigma_SI are not the same quantity and cannot be minimised together.
-DD_PIECES = (("mass_data_best2026", "sigmaedataGeV_best2026", "sig_si_theo_elec"),
-             ("mass_data_XENON1T_migdal", "sigmasidataGeV_XENON1T_migdal",
-              "sig_si_theo"),
-             ("mass_data_ds50_migdal", "sigmasidataGeV_ds50_migdal",
-              "sig_si_theo"))
+DD_PIECES = ((*best2026_electron(), sig_si_theo_elec),
+             (*xenon1t_migdal(), sig_si_theo),
+             (*read_csv_limit("DarkSide50-Migdal-2023.txt", 1.0), sig_si_theo))
 
 # The PandaX-4T S2 CEvNS recast, folded in only for the second case. It covers
 # mchi = 0.020 to 0.894 GeV, so it can only tighten the limit inside that band.
-DD_CENUNS = ("mass_data_cenuns", "sigmaedataGeV_cenuns", "sig_si_theo_elec")
+DD_CENUNS = (*read_csv_limit("PandaX4TS2_2025_CEnuNS.txt", MeV_to_GeV, sort=True),
+             sig_si_theo_elec)
 
 
-def dd_eps_limit(dd_ns, ma_grid, alpha_d, r, with_cenuns=False):
+def dd_eps_limit(ma_grid, alpha_d, r, with_cenuns=False):
     """The combined 2026 limit on eps along a mass grid, inf where uncovered.
 
-    This repeats best2026_at's combination rather than calling it, because
+    This repeats the notebook's best2026_at rather than its grid, because
     best2026_at can only answer on the notebook's own ma_dd grid, which starts
     at MAp = 0.01 GeV. The experiments reach an order of magnitude lower --
-    SENSEI tabulates down to mchi = 0.53 MeV -- so going through best2026_at
+    SENSEI tabulates down to mchi = 0.53 MeV -- so going through that grid
     would report a floor that belongs to a grid rather than to any measurement.
-    The pieces and the eps combination are the notebook's, via its own
-    eps_dd_limit; agreement with best2026_at on the range they share is 1%, the
-    residue of the extra interpolation through ma_dd that this path avoids.
+    Agreement with best2026_at on the range they share is 1%, the residue of
+    the extra interpolation through ma_dd that this path avoids.
     """
     ma_grid = np.asarray(ma_grid, dtype=float)
     mchi = r*ma_grid
     tables = DD_PIECES + (DD_CENUNS,) if with_cenuns else DD_PIECES
     pieces = []
-    for mass_key, sigma_key, theo_key in tables:
+    for mass_tab, sigma_tab, sigma_theo in tables:
         # eps_dd_limit refuses to extrapolate past a tabulated mass range, and
         # that refusal is carried through rather than papered over: a mass no
         # experiment reaches is untested, which is not the same as allowed.
-        m_v, e_v = dd_ns["eps_dd_limit"](ma_grid, mchi,
-                                         dd_ns[mass_key], dd_ns[sigma_key],
-                                         sigma_theo=dd_ns[theo_key],
-                                         alphaD=alpha_d)
+        m_v, e_v = eps_dd_limit(ma_grid, mchi, mass_tab, sigma_tab,
+                                sigma_theo=sigma_theo, alphaD=alpha_d)
         out = np.full(ma_grid.shape, np.inf)
         if m_v.size:
             inside = (ma_grid >= m_v.min()) & (ma_grid <= m_v.max())
@@ -145,64 +217,51 @@ def dd_eps_limit(dd_ns, ma_grid, alpha_d, r, with_cenuns=False):
     return np.min(pieces, axis=0)
 
 
-# The relic namespace is loaded once per worker process, never once per point.
-_NS = None
+# The job is handed to each worker process once, never once per point.
 _JOB = None
 
 
 def _init_worker(job):
-    """Pool initializer: load the notebooks' definitions into this process."""
-    global _NS, _JOB
-    # The notebooks read data/effective_dof.csv, data/rratio.dat and the direct
-    # detection tables by relative path, so the worker has to stand in Code/.
-    os.chdir(HERE)
-    _NS = load_notebook_defs()
+    """Pool initializer: store the job in this process."""
+    global _JOB
     _JOB = dict(job)
-    _JOB["dd_ns"] = load_dd_defs()
 
 
-def _safe_omega(ns):
+def _safe_omega(ma, vare, alphaD, mchi_over_ma, **solver):
     """omega_of_gg wrapped so a failed point stays a failed point.
 
     Where no annihilation channel is open -- mchi below the electron mass --
     the thermal average underflows and Radau raises ValueError rather than
     returning nan, which without this would take the whole scan down with it.
-    scan_relic_line reads omega_fun.__name__ for its info dict, so the name is
-    carried across.
     """
-    omega_of_gg = ns["omega_of_gg"]
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with np.errstate(all="ignore"):
+                return omega_of_gg(ma, vare, alphaD, mchi_over_ma, **solver)
+    except Exception:
+        return np.nan
 
-    def omega(ma, vare, alphaD, mchi_over_ma, **solver):
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                with np.errstate(all="ignore"):
-                    return omega_of_gg(ma, vare, alphaD, mchi_over_ma, **solver)
-        except Exception:
-            return np.nan
 
-    omega.__name__ = "omega_of_gg"
-    return omega
+# scan_relic_line reads omega_fun.__name__ for its info dict.
+_safe_omega.__name__ = "omega_of_gg"
 
 
 def _one_r(r):
     """Relic eps(MAp) at one mass ratio, and both DD limits along it."""
-    ns = _NS
     ma_grid = _JOB["ma_grid"]
     alpha_d = _JOB["alpha_d"]
     # scan_relic_line follows the crossing from its solved neighbours instead of
     # re-bracketing every mass, which is ~2 Boltzmann solves per mass rather
-    # than ~7. It is the notebook's own function, kept as the reference.
-    eps, _info = ns["scan_relic_line"](ma_grid, _JOB["eps_lo"], _JOB["eps_hi"],
-                                       alpha_d, r,
-                                       target=ns["OmegaDM"], tol=_JOB["tol"],
-                                       omega_fun=_safe_omega(ns))
-    dd_ns = _JOB["dd_ns"]
+    # than ~7.
+    eps, _info = scan_relic_line(ma_grid, _JOB["eps_lo"], _JOB["eps_hi"],
+                                 alpha_d, r, target=OmegaDM, tol=_JOB["tol"],
+                                 omega_fun=_safe_omega)
     # Both limits are pure interpolation, so the pair costs one relic line
     # rather than two.
     return (eps,
-            dd_eps_limit(dd_ns, ma_grid, alpha_d, r, with_cenuns=False),
-            dd_eps_limit(dd_ns, ma_grid, alpha_d, r, with_cenuns=True))
+            dd_eps_limit(ma_grid, alpha_d, r, with_cenuns=False),
+            dd_eps_limit(ma_grid, alpha_d, r, with_cenuns=True))
 
 
 def compute(r_grid, job, workers):
@@ -327,9 +386,8 @@ def main(argv=None):
         if verbose:
             print(f"read {CACHE}")
 
-    ns = load_notebook_defs()
-    h = ns["H0"]/H0_TO_H
-    omh2 = ns["OmegaDM"]*h*h
+    h = H0/H0_TO_H
+    omh2 = OmegaDM*h*h
 
     limits = {"nocenuns": lim, "cenuns": lim_cenuns}
     covered = {c: np.isfinite(limits[c]) for c in CASES}
